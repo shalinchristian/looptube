@@ -1,0 +1,22 @@
+#looptube-btn.looptube-button {
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.9;
+}
+
+#looptube-btn.looptube-button:hover,
+#looptube-btn.looptube-button:focus {
+    opacity: 1;
+}
+
+#looptube-btn.looptube-button.active {
+    color: #3ea6ff;
+}
+
+#looptube-btn.looptube-button svg {
+    width: 24px;
+    height: 24px;
+    pointer-events: none;
+}

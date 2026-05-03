@@ -1,0 +1,49 @@
+{
+    "name": "LoopTube",
+    "version": "1.0",
+    "manifest_version": 3,
+    "description": "Adds loop button inside YouTube player controls",
+    "permissions": [
+        "storage"
+    ],
+    "browser_specific_settings": {
+        "gecko": {
+            "id": "looptube@shalin.dev",
+            "data_collection_permissions": {
+                "required": [
+                    "none"
+                ]
+            }
+        }
+    },
+    "action": {
+        "default_title": "LoopTube",
+        "default_popup": "popup.html",
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "32": "icons/icon32.png"
+        }
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "*://www.youtube.com/*",
+                "*://m.youtube.com/*",
+                "*://youtu.be/*"
+            ],
+            "css": [
+                "style.css"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "run_at": "document_idle"
+        }
+    ],
+    "icons": {
+        "16": "icons/icon16.png",
+        "32": "icons/icon32.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    }
+}
