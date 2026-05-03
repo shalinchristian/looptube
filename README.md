@@ -64,7 +64,6 @@ All functionality runs locally within the browser.
 ## Compatibility
 
 * Desktop YouTube ([www.youtube.com](http://www.youtube.com))
-* Chromium-based browsers
 * Firefox
 
 ---
