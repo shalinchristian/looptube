@@ -1,6 +1,6 @@
 {
     "name": "LoopTube",
-    "version": "1.0",
+    "version": "1.0.1",
     "manifest_version": 3,
     "description": "Adds loop button inside YouTube player controls",
     "permissions": [
@@ -21,7 +21,8 @@
         "default_popup": "popup.html",
         "default_icon": {
             "16": "icons/icon16.png",
-            "32": "icons/icon32.png"
+            "32": "icons/icon32.png",
+            "48": "icons/icon48.png"
         }
     },
     "content_scripts": [
