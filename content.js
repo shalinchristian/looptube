@@ -4,6 +4,7 @@ const usingBrowserApi = typeof globalThis.browser !== 'undefined';
 const BUTTON_ID = 'looptube-btn';
 const ENABLED_KEY = 'looptubeEnabled';
 const VIDEO_KEY_PREFIX = 'looptube:video:';
+const MOBILE_ACTIVATION_DEDUPE_MS = 350;
 const isMobile = location.hostname.includes('m.youtube.com');
 
 const state = {
@@ -19,8 +20,11 @@ const state = {
     observedTarget: null,
     domObserver: null,
     videoObserver: null,
+    adObserver: null,
     retryTimeout: null,
-    mobileInterval: null
+    mobileInterval: null,
+    mobileInputHandlersInstalled: false,
+    lastMobileActivation: 0
 };
 
 function storageGet(defaults) {
@@ -71,7 +75,7 @@ function getPlayer() {
 
 function getVideo() {
     if (isMobile) return getMobileVid();
-    
+
     const player = getPlayer();
     return player
         ? player.querySelector('video.html5-main-video') || player.querySelector('video')
@@ -106,12 +110,18 @@ function getVideoId() {
 }
 
 function getSavedLoop(id) {
-    return localStorage.getItem(VIDEO_KEY_PREFIX + id) === 'true';
+    try {
+        return localStorage.getItem(VIDEO_KEY_PREFIX + id) === 'true';
+    } catch {
+        return false;
+    }
 }
 
 function saveLoop() {
     if (!state.enabled || state.ignoringLoopChange || !state.video || !state.videoId || isAdShowing()) return;
-    localStorage.setItem(VIDEO_KEY_PREFIX + state.videoId, String(state.video.loop));
+    try {
+        localStorage.setItem(VIDEO_KEY_PREFIX + state.videoId, String(state.video.loop));
+    } catch { }
 }
 
 function updateButton() {
@@ -119,7 +129,7 @@ function updateButton() {
     const active = Boolean(state.enabled && state.video && state.video.loop && !isAdShowing());
 
     if (!btn) return;
-    
+
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', String(active));
 
@@ -145,8 +155,101 @@ function setLoop(val, shouldSave) {
 }
 
 function toggleLoop() {
+    // Force re-fetch of the video element just in case YouTube swapped it
+    state.video = getVideo();
     if (!state.enabled || !state.video || isAdShowing()) return;
+
     setLoop(!state.video.loop, true);
+}
+
+function stopEvent(e, shouldPrevent) {
+    if (shouldPrevent && e.cancelable) e.preventDefault();
+    e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === 'function') {
+        e.stopImmediatePropagation();
+    }
+}
+
+function getEventPoint(e) {
+    const touch = e.changedTouches && e.changedTouches[0];
+    if (touch) return { x: touch.clientX, y: touch.clientY };
+
+    if (typeof e.clientX === 'number' && typeof e.clientY === 'number') {
+        return { x: e.clientX, y: e.clientY };
+    }
+
+    return null;
+}
+
+function mobileEventHitsButton(e) {
+    if (!isMobile) return false;
+
+    const btn = getButton();
+    if (!btn || !btn.isConnected) return false;
+
+    const style = getComputedStyle(btn);
+    if (
+        style.display === 'none' ||
+        style.visibility === 'hidden' ||
+        style.pointerEvents === 'none' ||
+        style.opacity === '0'
+    ) {
+        return false;
+    }
+
+    if (e.target === btn || btn.contains(e.target)) return true;
+
+    const point = getEventPoint(e);
+    if (!point) return false;
+
+    const rect = btn.getBoundingClientRect();
+    const hitSlop = 8;
+
+    return (
+        point.x >= rect.left - hitSlop &&
+        point.x <= rect.right + hitSlop &&
+        point.y >= rect.top - hitSlop &&
+        point.y <= rect.bottom + hitSlop
+    );
+}
+
+function absorbMobileButtonEvent(e) {
+    if (!mobileEventHitsButton(e)) return;
+    stopEvent(e, true);
+}
+
+function activateMobileButton(e) {
+    if (!mobileEventHitsButton(e)) return;
+
+    stopEvent(e, true);
+
+    const now = performance.now();
+    if (now - state.lastMobileActivation < MOBILE_ACTIVATION_DEDUPE_MS) return;
+
+    state.lastMobileActivation = now;
+    toggleLoop();
+}
+
+function installMobileInputHandlers() {
+    if (!isMobile || state.mobileInputHandlersInstalled) return;
+
+    window.addEventListener('pointerdown', absorbMobileButtonEvent, true);
+    window.addEventListener('pointerup', activateMobileButton, true);
+    window.addEventListener('touchstart', absorbMobileButtonEvent, { capture: true, passive: false });
+    window.addEventListener('touchend', activateMobileButton, { capture: true, passive: false });
+    window.addEventListener('click', activateMobileButton, true);
+    state.mobileInputHandlersInstalled = true;
+}
+
+function removeMobileInputHandlers() {
+    if (!state.mobileInputHandlersInstalled) return;
+
+    window.removeEventListener('pointerdown', absorbMobileButtonEvent, true);
+    window.removeEventListener('pointerup', activateMobileButton, true);
+    window.removeEventListener('touchstart', absorbMobileButtonEvent, true);
+    window.removeEventListener('touchend', activateMobileButton, true);
+    window.removeEventListener('click', activateMobileButton, true);
+    state.mobileInputHandlersInstalled = false;
 }
 
 function createIcon() {
@@ -154,6 +257,8 @@ function createIcon() {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 
     svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '100%');
+    svg.setAttribute('height', '100%');
     svg.setAttribute('aria-hidden', 'true');
     path.setAttribute('fill', 'currentColor');
     path.setAttribute('d', 'M7 7h11v3l4-4-4-4v3H5v6h2zm10 10H6v-3l-4 4 4 4v-3h13v-6h-2z');
@@ -170,8 +275,21 @@ function createButton() {
     btn.title = 'Loop (L)';
     btn.setAttribute('aria-label', 'Loop (L)');
     btn.setAttribute('aria-pressed', 'false');
+
+    // Custom JS property to track authenticity
+    btn._isLoopTubeBtn = true;
+
     btn.appendChild(createIcon());
-    btn.addEventListener('click', toggleLoop);
+
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleLoop();
+    });
+
+    // Prevent YouTube from stealing the click via mousedown
+    btn.addEventListener('mousedown', (e) => e.stopPropagation());
+
     return btn;
 }
 
@@ -181,19 +299,22 @@ function createMobileButton() {
 
     btn.id = BUTTON_ID;
     btn.type = 'button';
-    btn.className = 'icon-button looptube-mobile-button'; 
+    btn.className = 'icon-button looptube-mobile-button';
     btn.title = 'Loop';
     btn.setAttribute('aria-label', 'Loop');
     btn.setAttribute('aria-pressed', 'false');
-    
-    // Restored center-right positioning
+
+    btn._isLoopTubeBtn = true;
+
     btn.style.setProperty('position', 'absolute', 'important');
     btn.style.setProperty('top', '50%', 'important');
     btn.style.setProperty('right', '15px', 'important');
     btn.style.setProperty('transform', 'translateY(-50%)', 'important');
     btn.style.setProperty('margin', '0', 'important');
-    btn.style.setProperty('z-index', '2147483647', 'important'); 
-    
+    btn.style.setProperty('z-index', '2147483647', 'important');
+    btn.style.setProperty('pointer-events', 'auto', 'important');
+    btn.style.setProperty('touch-action', 'manipulation', 'important');
+
     btn.style.background = 'rgba(0, 0, 0, 0.4)';
     btn.style.borderRadius = '50%';
     btn.style.color = '#ffffff';
@@ -205,20 +326,20 @@ function createMobileButton() {
     icon.style.width = '24px';
     icon.style.height = '24px';
     icon.style.fill = 'currentColor';
-    
+
     btn.appendChild(icon);
 
-    btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation(); 
-        toggleLoop();
-    });
+    btn.addEventListener('pointerdown', absorbMobileButtonEvent);
+    btn.addEventListener('pointerup', activateMobileButton);
+    btn.addEventListener('touchstart', absorbMobileButtonEvent, { passive: false });
+    btn.addEventListener('touchend', activateMobileButton, { passive: false });
+    btn.addEventListener('click', activateMobileButton);
 
     return btn;
 }
 
 function placeButton(btn, controls) {
-    const ccBtn = Array.from(controls.children).find((c) => c.classList && c.classList.contains('ytp-subtitles-button'));
+    const ccBtn = controls.querySelector('.ytp-subtitles-button') || controls.querySelector('.ytp-settings-button');
 
     try {
         if (ccBtn && ccBtn.parentNode === controls) {
@@ -243,12 +364,14 @@ function ensureButton() {
         const oldBtn = getButton();
 
         if (!controls) return;
-        
-        if (oldBtn && oldBtn.parentNode === controls) {
+
+        // Ensure the button exists AND is not a dead YouTube clone
+        if (oldBtn && oldBtn.parentNode === controls && oldBtn._isLoopTubeBtn) {
             updateButton();
             return;
         }
 
+        // If it's a dead clone, destroy it
         if (oldBtn) oldBtn.remove();
 
         try {
@@ -262,7 +385,15 @@ function ensureButton() {
 }
 
 function ensureMobileButton() {
+    installMobileInputHandlers();
+
     let btn = document.getElementById(BUTTON_ID);
+
+    // Destroy dead clones
+    if (btn && !btn._isLoopTubeBtn) {
+        btn.remove();
+        btn = null;
+    }
 
     if (!btn) btn = createMobileButton();
 
@@ -283,7 +414,7 @@ function ensureMobileButton() {
     if (!state.mobileInterval) {
         state.mobileInterval = setInterval(() => {
             const currentBtn = document.getElementById(BUTTON_ID);
-            
+
             if (!currentBtn || !currentBtn.isConnected) {
                 clearInterval(state.mobileInterval);
                 state.mobileInterval = null;
@@ -293,7 +424,7 @@ function ensureMobileButton() {
 
             const isFull = !!document.fullscreenElement || !!document.webkitFullscreenElement;
             currentBtn.style.opacity = isFull ? '0' : '1';
-            currentBtn.style.pointerEvents = isFull ? 'none' : 'auto';
+            currentBtn.style.setProperty('pointer-events', isFull ? 'none' : 'auto', 'important');
         }, 300);
     }
 }
@@ -311,7 +442,7 @@ function watchVideo(vid) {
         saveLoop();
         updateButton();
     });
-    
+
     state.videoObserver.observe(vid, {
         attributes: true,
         attributeFilter: ['loop']
@@ -372,18 +503,17 @@ function observeDom() {
     if (!target || target === state.observedTarget) return;
 
     if (state.domObserver) state.domObserver.disconnect();
+    if (state.adObserver) state.adObserver.disconnect();
 
     state.observedTarget = target;
-    state.domObserver = new MutationObserver(scheduleRun);
 
-    const options = { childList: true, subtree: true };
+    state.domObserver = new MutationObserver(scheduleRun);
+    state.domObserver.observe(target, { childList: true, subtree: true });
 
     if (target === state.player) {
-        options.attributes = true;
-        options.attributeFilter = ['class', 'style'];
+        state.adObserver = new MutationObserver(scheduleRun);
+        state.adObserver.observe(target, { attributes: true, attributeFilter: ['class', 'style'] });
     }
-
-    state.domObserver.observe(target, options);
 }
 
 function isTyping(e) {
@@ -408,18 +538,161 @@ function resetCache() {
     state.videoId = '';
     state.wasAdShowing = false;
     clearTimeout(state.retryTimeout);
-    
+
+    if (state.adObserver) {
+        state.adObserver.disconnect();
+        state.adObserver = null;
+    }
+
     if (state.mobileInterval) {
         clearInterval(state.mobileInterval);
         state.mobileInterval = null;
     }
 }
+const bgPlay = {
+    inited: false,
+    interval: null,
+    wasPlaying: false,
+    eventsBound: false,
 
+    init() {
+        this.syncState();
+        if (this.inited) return;
+        this.inited = true;
+
+        this.injectSpoofer();
+        this.bindEvents();
+        this.startKeepAlive();
+    },
+
+    syncState() {
+        // Pass enabled state to the main world via dataset
+        document.documentElement.dataset.bgPlay = String(state.enabled);
+    },
+
+    injectSpoofer() {
+        if (document.getElementById('looptube-spoofer')) return;
+
+        const script = document.createElement('script');
+        script.id = 'looptube-spoofer';
+        script.textContent = `
+            (() => {
+                const isActive = () => document.documentElement.dataset.bgPlay === 'true';
+
+                // 1. Preserve and override descriptors safely
+                const props = [
+                    { obj: Document.prototype, prop: 'hidden', trueVal: false },
+                    { obj: Document.prototype, prop: 'webkitHidden', trueVal: false },
+                    { obj: Document.prototype, prop: 'visibilityState', trueVal: 'visible' },
+                    { obj: Document.prototype, prop: 'webkitVisibilityState', trueVal: 'visible' }
+                ];
+
+                props.forEach(({ obj, prop, trueVal }) => {
+                    const orig = Object.getOwnPropertyDescriptor(obj, prop);
+                    if (!orig) return;
+
+                    Object.defineProperty(document, prop, {
+                        configurable: true,
+                        enumerable: true,
+                        get() {
+                            if (isActive()) return trueVal;
+                            return orig.get ? orig.get.call(this) : orig.value;
+                        }
+                    });
+                });
+
+                // 2. Main-world event blocking
+                const stopEvt = (e) => {
+                    if (isActive() && e.isTrusted) {
+                        e.stopImmediatePropagation();
+                        e.stopPropagation();
+                    }
+                };
+
+                ['visibilitychange', 'webkitvisibilitychange', 'pagehide', 'blur'].forEach(evt => {
+                    document.addEventListener(evt, stopEvt, true);
+                    window.addEventListener(evt, stopEvt, true);
+                });
+            })();
+        `;
+        (document.head || document.documentElement).appendChild(script);
+        script.remove();
+    },
+
+    handleEvent(e) {
+        if (state.enabled && e.isTrusted) {
+            e.stopImmediatePropagation();
+            e.stopPropagation();
+        }
+    },
+
+    bindEvents() {
+        if (this.eventsBound) return;
+        const evts = ['visibilitychange', 'webkitvisibilitychange', 'pagehide', 'blur'];
+
+        // Bind functions directly to preserve references
+        this.boundHandleEvent = this.handleEvent.bind(this);
+
+        evts.forEach(evt => {
+            document.addEventListener(evt, this.boundHandleEvent, true);
+            window.addEventListener(evt, this.boundHandleEvent, true);
+        });
+        this.eventsBound = true;
+    },
+    unbindEvents() {
+        if (!this.eventsBound || !this.boundHandleEvent) return;
+
+        const evts = ['visibilitychange', 'webkitvisibilitychange', 'pagehide', 'blur'];
+
+        evts.forEach(evt => {
+            document.removeEventListener(evt, this.boundHandleEvent, true);
+            window.removeEventListener(evt, this.boundHandleEvent, true);
+        });
+
+        this.eventsBound = false;
+    },
+    startKeepAlive() {
+        if (this.interval) clearInterval(this.interval);
+
+        this.interval = setInterval(() => {
+            if (!state.enabled || !state.video) return;
+
+            // Firefox isolated worlds (Xray vision) allow extensions to read the REAL document.hidden
+            const isReallyHidden = document.hidden;
+
+            if (!isReallyHidden) {
+                this.wasPlaying = !state.video.paused;
+                return;
+            }
+
+            // Auto-resume ONLY if backgrounded, previously playing, and paused by system
+            if (isReallyHidden && this.wasPlaying && state.video.paused && !state.video.ended) {
+                const p = state.video.play();
+                // Safely handle environments where play() doesn't return a Promise
+                if (p && typeof p.catch === 'function') {
+                    p.catch(() => { });
+                }
+            }
+        }, 800);
+    },
+
+    stop() {
+        document.documentElement.dataset.bgPlay = 'false';
+        this.unbindEvents();
+        if (this.interval) {
+            clearInterval(this.interval);
+            this.interval = null;
+        }
+    }
+};
 function start() {
     if (state.started) return;
 
     state.started = true;
     state.enabled = true;
+    if (isMobile) {
+        bgPlay.init();
+    }
     document.addEventListener('keydown', handleKeydown, true);
     window.addEventListener('yt-navigate-finish', handleNavigation);
     window.addEventListener('yt-page-data-updated', handleNavigation);
@@ -432,17 +705,24 @@ function stop() {
     state.enabled = false;
     state.started = false;
     state.scheduled = false;
+    if (isMobile) {
+        bgPlay.stop();
+    }
 
     document.removeEventListener('keydown', handleKeydown, true);
     window.removeEventListener('yt-navigate-finish', handleNavigation);
     window.removeEventListener('yt-page-data-updated', handleNavigation);
+    removeMobileInputHandlers();
 
     if (state.domObserver) state.domObserver.disconnect();
     if (state.videoObserver) state.videoObserver.disconnect();
+    if (state.adObserver) state.adObserver.disconnect();
 
     state.domObserver = null;
     state.videoObserver = null;
+    state.adObserver = null;
     state.observedTarget = null;
+
     getButton()?.remove();
     resetCache();
 }
@@ -485,4 +765,4 @@ storageGet({ [ENABLED_KEY]: true }).then((data) => {
         if (document.body) start();
         else window.addEventListener('DOMContentLoaded', start, { once: true });
     }
-}); 
+});
