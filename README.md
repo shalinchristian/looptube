@@ -1,38 +1,54 @@
 # LoopTube
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Version](https://img.shields.io/badge/version-1.0.1-green.svg)
+![Version](https://img.shields.io/badge/version-1.1.0-green.svg)
 ![Platform](https://img.shields.io/badge/platform-Firefox-lightgrey)
 ![Support](https://img.shields.io/badge/support-Desktop%20%2B%20Mobile-orange)
 
-A lightweight browser extension that adds a loop button directly inside the YouTube video player.
+A lightweight Firefox extension that adds a native-feeling loop button directly inside the YouTube video player.
 
 ---
 
 <p align="center">
-  <img src="assets/screenshot.png" alt="LoopTube Demo" width="700">
+  <img src="assets/screenshot.png" alt="LoopTube Desktop Demo" width="700">
+</p>
+
+<p align="center">
+  <img src="assets/mobile-screenshot.jpg" alt="LoopTube Mobile Demo" width="300">
 </p>
 
 ---
 
 ## Overview
 
-LoopTube integrates a loop control directly into the YouTube player, allowing videos to repeat without leaving the interface.
+LoopTube integrates a native-style loop control directly into the YouTube player, allowing videos to repeat without leaving the interface.
 
-Designed to feel native, lightweight, and unobtrusive across both desktop and mobile layouts.
+Built to stay lightweight, responsive, and visually consistent with YouTube’s UI across both desktop and mobile layouts.
+
+---
+
+## What's New in v1.1.0
+
+* Added full mobile YouTube support
+* Added background playback support on mobile Firefox
+* Improved player control visibility handling
+* Better synchronization with fullscreen and overlay UI
+* Improved reliability during YouTube navigation and page transitions
 
 ---
 
 ## Features
 
-* Loop button integrated into the YouTube player controls
-* Toggle loop with a single click
+* Native-style loop button integrated into YouTube controls
+* Toggle loop instantly with one click
 * Keyboard shortcut (**L**) on desktop
-* Mobile YouTube player support
+* Full mobile YouTube support
+* Background playback support on mobile Firefox
 * Remembers loop state per video
-* Works with autoplay and navigation
-* Handles YouTube’s dynamic UI reliably
-* Controls appear and disappear naturally with YouTube UI
+* Works with autoplay and dynamic navigation
+* Reliable handling of YouTube UI re-renders
+* Controls appear and disappear naturally with YouTube overlays
+* Lightweight with no external dependencies
 
 ---
 
@@ -45,9 +61,11 @@ Available on the Firefox Add-ons store.
 ### Manual Installation
 
 1. Clone or download this repository
-2. Open your browser’s extensions page
-3. Enable Developer Mode
-4. Load the extension folder
+2. Open Firefox
+3. Navigate to `about:debugging`
+4. Select This Firefox
+5. Click Load Temporary Add-on
+6. Select the extension’s `manifest.json`
 
 ---
 
@@ -67,9 +85,10 @@ All functionality runs locally within the browser.
 
 ## Compatibility
 
-* Desktop YouTube (`www.youtube.com`)
-* Mobile YouTube interface
-* Firefox
+* Firefox Desktop
+* Firefox for Android
+* YouTube Desktop (`www.youtube.com`)
+* YouTube Mobile Web Interface
 
 ---
 
@@ -84,3 +103,10 @@ looptube/
 ├── style.css
 ├── icons/
 └── assets/
+````
+
+---
+
+<sub>
+Built to feel like it was always part of YouTube.
+</sub>
