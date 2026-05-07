@@ -554,6 +554,9 @@ const bgPlay = {
     interval: null,
     wasPlaying: false,
     eventsBound: false,
+    userPaused: false,
+    videoListenersBound: false,
+    mediaSessionBound: false,
 
     init() {
         this.syncState();
@@ -562,6 +565,7 @@ const bgPlay = {
 
         this.injectSpoofer();
         this.bindEvents();
+        this.bindMediaSession();
         this.startKeepAlive();
     },
 
@@ -569,7 +573,32 @@ const bgPlay = {
         // Pass enabled state to the main world via dataset
         document.documentElement.dataset.bgPlay = String(state.enabled);
     },
+    bindMediaSession() {
+        if (this.mediaSessionBound || !('mediaSession' in navigator)) return;
 
+        try {
+            navigator.mediaSession.setActionHandler('pause', () => {
+                this.userPaused = true;
+
+                if (state.video && !state.video.paused) {
+                    state.video.pause();
+                }
+            });
+
+            navigator.mediaSession.setActionHandler('play', () => {
+                this.userPaused = false;
+
+                if (state.video && state.video.paused) {
+                    const p = state.video.play();
+                    if (p && typeof p.catch === 'function') {
+                        p.catch(() => { });
+                    }
+                }
+            });
+
+            this.mediaSessionBound = true;
+        } catch { }
+    },
     injectSpoofer() {
         if (document.getElementById('looptube-spoofer')) return;
 
@@ -657,7 +686,6 @@ const bgPlay = {
         this.interval = setInterval(() => {
             if (!state.enabled || !state.video) return;
 
-            // Firefox isolated worlds (Xray vision) allow extensions to read the REAL document.hidden
             const isReallyHidden = document.hidden;
 
             if (!isReallyHidden) {
@@ -665,10 +693,16 @@ const bgPlay = {
                 return;
             }
 
-            // Auto-resume ONLY if backgrounded, previously playing, and paused by system
-            if (isReallyHidden && this.wasPlaying && state.video.paused && !state.video.ended) {
+            if (
+                isReallyHidden &&
+                this.wasPlaying &&
+                state.video.paused &&
+                !state.video.ended &&
+                !this.userPaused
+            ) {
+                this.userPaused = false;
                 const p = state.video.play();
-                // Safely handle environments where play() doesn't return a Promise
+
                 if (p && typeof p.catch === 'function') {
                     p.catch(() => { });
                 }
@@ -677,6 +711,8 @@ const bgPlay = {
     },
 
     stop() {
+        this.mediaSessionBound = false;
+        this.userPaused = false;
         document.documentElement.dataset.bgPlay = 'false';
         this.unbindEvents();
         if (this.interval) {
