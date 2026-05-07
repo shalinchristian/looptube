@@ -156,7 +156,15 @@ function setLoop(val, shouldSave) {
 
 function toggleLoop() {
     // Force re-fetch of the video element just in case YouTube swapped it
-    state.video = getVideo();
+    const vid = getVideo();
+    if (vid) {
+        watchVideo(vid);
+    } else {
+        state.video = null;
+        state.videoId = '';
+        if (isMobile) bgPlay.detachVideoListeners();
+    }
+
     if (!state.enabled || !state.video || isAdShowing()) return;
 
     setLoop(!state.video.loop, true);
@@ -433,10 +441,13 @@ function watchVideo(vid) {
     const id = getVideoId();
 
     if (vid === state.video && id === state.videoId) return;
+    if (isMobile) bgPlay.detachVideoListeners();
     if (state.videoObserver) state.videoObserver.disconnect();
 
     state.video = vid;
     state.videoId = id;
+
+    if (isMobile) bgPlay.attachVideoListeners(vid);
 
     state.videoObserver = new MutationObserver(() => {
         saveLoop();
@@ -461,6 +472,7 @@ function refreshVideo() {
     if (vid) {
         watchVideo(vid);
     } else {
+        if (isMobile) bgPlay.detachVideoListeners();
         state.video = null;
         state.videoId = '';
         updateButton();
@@ -532,6 +544,8 @@ function handleKeydown(e) {
 }
 
 function resetCache() {
+    if (isMobile) bgPlay.detachVideoListeners();
+
     state.player = null;
     state.video = null;
     state.controls = null;
@@ -555,8 +569,11 @@ const bgPlay = {
     wasPlaying: false,
     eventsBound: false,
     userPaused: false,
-    videoListenersBound: false,
-    mediaSessionBound: false,
+    suspendByVisibility: false,
+    visibilityTimer: null,
+    attachedVideo: null,
+    videoPauseHandler: null,
+    videoPlayHandler: null,
 
     init() {
         this.syncState();
@@ -565,7 +582,6 @@ const bgPlay = {
 
         this.injectSpoofer();
         this.bindEvents();
-        this.bindMediaSession();
         this.startKeepAlive();
     },
 
@@ -573,31 +589,43 @@ const bgPlay = {
         // Pass enabled state to the main world via dataset
         document.documentElement.dataset.bgPlay = String(state.enabled);
     },
-    bindMediaSession() {
-        if (this.mediaSessionBound || !('mediaSession' in navigator)) return;
+    attachVideoListeners(video) {
+        if (!video || this.attachedVideo === video) return;
 
-        try {
-            navigator.mediaSession.setActionHandler('pause', () => {
+        this.detachVideoListeners();
+
+        this.videoPauseHandler = () => {
+            if (!this.suspendByVisibility) {
                 this.userPaused = true;
+            }
+        };
 
-                if (state.video && !state.video.paused) {
-                    state.video.pause();
-                }
-            });
+        this.videoPlayHandler = () => {
+            this.userPaused = false;
+        };
 
-            navigator.mediaSession.setActionHandler('play', () => {
-                this.userPaused = false;
+        video.addEventListener('pause', this.videoPauseHandler);
+        video.addEventListener('play', this.videoPlayHandler);
+        this.attachedVideo = video;
+    },
+    detachVideoListeners() {
+        if (!this.attachedVideo) {
+            this.videoPauseHandler = null;
+            this.videoPlayHandler = null;
+            return;
+        }
 
-                if (state.video && state.video.paused) {
-                    const p = state.video.play();
-                    if (p && typeof p.catch === 'function') {
-                        p.catch(() => { });
-                    }
-                }
-            });
+        if (this.videoPauseHandler) {
+            this.attachedVideo.removeEventListener('pause', this.videoPauseHandler);
+        }
 
-            this.mediaSessionBound = true;
-        } catch { }
+        if (this.videoPlayHandler) {
+            this.attachedVideo.removeEventListener('play', this.videoPlayHandler);
+        }
+
+        this.attachedVideo = null;
+        this.videoPauseHandler = null;
+        this.videoPlayHandler = null;
     },
     injectSpoofer() {
         if (document.getElementById('looptube-spoofer')) return;
@@ -661,11 +689,36 @@ const bgPlay = {
 
         // Bind functions directly to preserve references
         this.boundHandleEvent = this.handleEvent.bind(this);
+        this.boundVisibilitySync = () => {
+            if (document.hidden) {
+                this.suspendByVisibility = true;
+
+                if (this.visibilityTimer) {
+                    clearTimeout(this.visibilityTimer);
+                }
+
+                this.visibilityTimer = setTimeout(() => {
+                    this.suspendByVisibility = false;
+                    this.visibilityTimer = null;
+                }, 1200);
+            } else {
+                this.suspendByVisibility = false;
+
+                if (this.visibilityTimer) {
+                    clearTimeout(this.visibilityTimer);
+                    this.visibilityTimer = null;
+                }
+            }
+        };
 
         evts.forEach(evt => {
+            document.addEventListener(evt, this.boundVisibilitySync, true);
+            window.addEventListener(evt, this.boundVisibilitySync, true);
             document.addEventListener(evt, this.boundHandleEvent, true);
             window.addEventListener(evt, this.boundHandleEvent, true);
         });
+
+        this.boundVisibilitySync();
         this.eventsBound = true;
     },
     unbindEvents() {
@@ -674,10 +727,15 @@ const bgPlay = {
         const evts = ['visibilitychange', 'webkitvisibilitychange', 'pagehide', 'blur'];
 
         evts.forEach(evt => {
+            if (this.boundVisibilitySync) {
+                document.removeEventListener(evt, this.boundVisibilitySync, true);
+                window.removeEventListener(evt, this.boundVisibilitySync, true);
+            }
             document.removeEventListener(evt, this.boundHandleEvent, true);
             window.removeEventListener(evt, this.boundHandleEvent, true);
         });
 
+        this.boundVisibilitySync = null;
         this.eventsBound = false;
     },
     startKeepAlive() {
@@ -698,9 +756,8 @@ const bgPlay = {
                 this.wasPlaying &&
                 state.video.paused &&
                 !state.video.ended &&
-                !this.userPaused
+                this.userPaused === false
             ) {
-                this.userPaused = false;
                 const p = state.video.play();
 
                 if (p && typeof p.catch === 'function') {
@@ -711,9 +768,14 @@ const bgPlay = {
     },
 
     stop() {
-        this.mediaSessionBound = false;
         this.userPaused = false;
+        this.suspendByVisibility = false;
+        if (this.visibilityTimer) {
+            clearTimeout(this.visibilityTimer);
+            this.visibilityTimer = null;
+        }
         document.documentElement.dataset.bgPlay = 'false';
+        this.detachVideoListeners();
         this.unbindEvents();
         if (this.interval) {
             clearInterval(this.interval);
